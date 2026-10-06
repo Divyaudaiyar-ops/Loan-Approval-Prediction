@@ -28,7 +28,6 @@ from src.preprocessing import add_features
 from src.ui import (
     inject_theme_css,
     render_sidebar_brand,
-    render_disclaimer_footer,
     render_page_hero,
     render_verdict_enhanced,
     render_probability_gauge,
@@ -609,4 +608,3 @@ with st.expander("ℹ️  Understanding Loan-to-Income Ratio", expanded=False):
         """
     )
 
-render_disclaimer_footer()

@@ -36,7 +36,6 @@ from src.preprocessing import add_features
 from src.ui import (
     inject_theme_css,
     render_sidebar_brand,
-    render_disclaimer_footer,
     section_title,
     render_error_state,
     render_empty_state,
@@ -1067,4 +1066,3 @@ with st.expander("📚 Browse the full knowledge base", expanded=False):
 # DISCLAIMER FOOTER
 # ============================================================
 
-render_disclaimer_footer()

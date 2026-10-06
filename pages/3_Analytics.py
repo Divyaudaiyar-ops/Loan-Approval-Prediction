@@ -26,7 +26,6 @@ if SRC_PATH not in sys.path:
 from src.ui import (
     inject_theme_css,
     render_sidebar_brand,
-    render_disclaimer_footer,
     section_title,
     loading_spinner,
     render_error_state,
@@ -1026,4 +1025,3 @@ st.info(
 )
 
 
-render_disclaimer_footer()
