@@ -1,0 +1,22 @@
+# Local Python environment and cache
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local secrets and Streamlit credentials
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Local prediction history/database
+*.db
+*.sqlite
+*.sqlite3
+
+# Editor / OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

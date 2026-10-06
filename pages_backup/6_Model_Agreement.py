@@ -1,0 +1,845 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import joblib
+import sqlite3
+import os
+import sys
+
+from datetime import datetime
+from pathlib import Path
+
+
+# ============================================================
+# PROJECT PATH SETUP
+# ============================================================
+
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(
+        os.path.abspath(__file__)
+    )
+)
+
+SRC_PATH = os.path.join(
+    PROJECT_ROOT,
+    "src"
+)
+
+if SRC_PATH not in sys.path:
+    sys.path.insert(0, SRC_PATH)
+
+
+from src.preprocessing import add_features
+
+from src.ui import (
+    inject_theme_css,
+    render_sidebar_brand,
+    render_disclaimer_footer,
+    section_title,
+    loading_spinner,
+    render_error_state,
+    render_empty_state,
+    render_alert,
+    mini_stat_html,
+    pro_card,
+    render_page_hero,
+    risk_badge_html,
+    render_verdict_enhanced,
+)
+
+
+# ============================================================
+# PAGE CONFIGURATION
+# ============================================================
+
+st.set_page_config(
+    page_title="Model Agreement · Loan Approval DSS",
+    page_icon="🤝",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+inject_theme_css()
+render_sidebar_brand(
+    app_name="Model Agreement",
+    subtitle="Multi-Model Consensus Analysis"
+)
+
+
+# ============================================================
+# FILE PATHS
+# ============================================================
+
+MODELS_DIR = os.path.join(
+    PROJECT_ROOT,
+    "models"
+)
+
+DB_PATH = os.path.join(
+    PROJECT_ROOT,
+    "loan_predictions.db"
+)
+
+
+# ============================================================
+# DATABASE
+# ============================================================
+
+def create_database():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            model TEXT,
+            prediction TEXT,
+            probability REAL,
+            applicant_income REAL,
+            coapplicant_income REAL,
+            total_income REAL,
+            loan_amount REAL,
+            loan_to_income REAL,
+            credit_history REAL,
+            education TEXT,
+            property_area TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+create_database()
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    section_title("🤝 Model Agreement")
+    st.markdown(
+        "Submit one applicant profile and compare the predictions "
+        "+ probabilities from **all 8 classifiers** side-by-side."
+    )
+
+    st.divider()
+
+    st.caption(
+        "Explainable ML Based Loan Approval Prediction"
+    )
+
+    st.caption(
+        "Academic Decision Support Prototype"
+    )
+
+
+# ============================================================
+# PAGE HERO
+# ============================================================
+
+render_page_hero(
+    chip_label="MODEL CONSENSUS",
+    title="Model Agreement",
+    subtitle=(
+        "Submit **one applicant profile** and simultaneously run it through every "
+        "trained classifier available in the project. Every model's verdict + "
+        "approval probability is compared side-by-side with consensus analysis."
+    ),
+    mini_stats=[
+        {"label": "Classifiers", "value": "8 Models", "sub": "5 Base + 3 Tuned", "variant": "primary"},
+        {"label": "Consensus", "value": "Real-time", "sub": "Full / Split / Divided", "variant": "info"},
+        {"label": "Output", "value": "CSV + DB", "sub": "Audit-ready export", "variant": "success"},
+    ]
+)
+
+
+# ============================================================
+# LOAD ALL MODELS
+# ============================================================
+
+MODEL_CATALOG = {
+    "Logistic Regression": {
+        "file": "logistic_regression.pkl",
+        "type": "Base",
+        "tag": "Baseline · Linear"
+    },
+    "Decision Tree": {
+        "file": "decision_tree.pkl",
+        "type": "Base",
+        "tag": "Rule-Based"
+    },
+    "Random Forest": {
+        "file": "random_forest.pkl",
+        "type": "Base",
+        "tag": "Ensemble · Bagging"
+    },
+    "SVM": {
+        "file": "svm.pkl",
+        "type": "Base",
+        "tag": "Kernel · Max Margin"
+    },
+    "XGBoost": {
+        "file": "xgboost.pkl",
+        "type": "Base",
+        "tag": "Gradient Boosting"
+    },
+    "Random Forest Tuned": {
+        "file": "random_forest_tuned.pkl",
+        "type": "Tuned",
+        "tag": "Tuned via RandomizedSearchCV"
+    },
+    "SVM Tuned": {
+        "file": "svm_tuned.pkl",
+        "type": "Tuned",
+        "tag": "Tuned via RandomizedSearchCV"
+    },
+    "XGBoost Tuned": {
+        "file": "xgboost_tuned.pkl",
+        "type": "Tuned",
+        "tag": "Tuned via RandomizedSearchCV"
+    }
+}
+
+
+@st.cache_resource(show_spinner=False)
+def load_all_models():
+    loaded = {}
+    for name, info in MODEL_CATALOG.items():
+        path = Path(MODELS_DIR) / info["file"]
+        if path.exists():
+            try:
+                loaded[name] = joblib.load(path)
+            except Exception:
+                pass
+    return loaded
+
+
+with loading_spinner("Loading all 8 persisted models ..."):
+    all_models = load_all_models()
+
+
+# ============================================================
+# HELPER
+# ============================================================
+
+def save_agreement_to_db(
+    results_df,
+    applicant_income,
+    coapplicant_income,
+    total_income,
+    loan_amount,
+    loan_to_income,
+    credit_history,
+    education,
+    property_area,
+):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for _, row in results_df.iterrows():
+        cursor.execute(
+            """
+            INSERT INTO predictions
+            (
+                timestamp, model, prediction, probability,
+                applicant_income, coapplicant_income, total_income,
+                loan_amount, loan_to_income, credit_history,
+                education, property_area
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ts,
+                row["Model"],
+                row["Prediction"],
+                float(row["Probability"]),
+                float(applicant_income),
+                float(coapplicant_income),
+                float(total_income),
+                float(loan_amount),
+                float(loan_to_income),
+                float(credit_history),
+                str(education),
+                str(property_area),
+            )
+        )
+    conn.commit()
+    conn.close()
+    return len(results_df)
+
+
+if not all_models:
+    render_error_state(
+        "No trained models were found in the `models/` directory.",
+        hint="Re-run `src/train_models.py` and `src/tune_models.py` to generate the pickles."
+    )
+    st.stop()
+
+st.markdown("---")
+
+# ============================================================
+# APPLICANT FORM
+# ============================================================
+
+section_title("👤 Applicant Profile")
+
+st.caption(
+    "Tip: values you enter here are fed to every model simultaneously when you click "
+    "**Run Agreement Check** below."
+)
+
+form_c1, form_c2 = st.columns([2.2, 1])
+
+with form_c1:
+
+    with st.form("agreement_form", clear_on_submit=False):
+
+        st.markdown(
+            "**Demographics**"
+        )
+
+        d1, d2, d3 = st.columns(3)
+
+        with d1:
+            gender = st.selectbox("Gender", ["Male", "Female"])
+            married = st.selectbox("Marital Status", ["Yes", "No"])
+        with d2:
+            dependents = st.selectbox("Dependents", [0, 1, 2, 3])
+            education = st.selectbox("Education", ["Graduate", "Not Graduate"])
+        with d3:
+            self_employed = st.selectbox("Self Employed", ["No", "Yes"])
+            credit_history = st.selectbox(
+                "Credit History",
+                [1.0, 0.0],
+                format_func=lambda v:
+                    "✅ Good – Meets guidelines" if v == 1.0
+                    else "❌ Poor / Absent"
+            )
+
+        st.markdown("")
+        st.markdown("**Property & Loan**")
+
+        f1, f2, f3 = st.columns(3)
+
+        with f1:
+            property_area = st.selectbox(
+                "Property Area", ["Semiurban", "Urban", "Rural"]
+            )
+            applicant_income = st.number_input(
+                "Applicant Income",
+                min_value=0.0, value=5000.0, step=100.0
+            )
+        with f2:
+            loan_amount = st.number_input(
+                "Loan Amount", min_value=0.0, value=150.0, step=10.0
+            )
+            coapplicant_income = st.number_input(
+                "Coapplicant Income",
+                min_value=0.0, value=0.0, step=100.0
+            )
+        with f3:
+            loan_term = st.selectbox(
+                "Loan Term (months)",
+                [360, 300, 240, 180, 120, 84, 60, 36],
+                format_func=lambda v:
+                    f"{v} months ({v/12:.0f} yrs)"
+            )
+            pass
+
+        st.divider()
+
+        save_option = st.checkbox(
+            "💾 Save every model's verdict to Prediction History DB",
+            value=True
+        )
+
+        run = st.form_submit_button(
+            "🚀 Run Agreement Check on All Models",
+            width='stretch'
+        )
+
+
+# Live summary panel
+
+with form_c2:
+
+    total_income = applicant_income + coapplicant_income
+    loan_to_income = loan_amount / (total_income + 1)
+
+    lti_risk = "LOW  🟢"
+    lti_color = "#16a34a"
+    if 0.02 <= loan_to_income < 0.04:
+        lti_risk = "MEDIUM  🟡"
+        lti_color = "#d97706"
+    elif loan_to_income >= 0.04:
+        lti_risk = "HIGH  🔴"
+        lti_color = "#dc2626"
+
+    st.markdown(
+        f"""
+        <div style="
+            border:1px solid #d6d6e6;
+            border-radius:14px;
+            padding:18px 20px;
+            background:linear-gradient(135deg,#ffffff 0%,#f6f8ff 100%);
+            height:100%;
+        ">
+            <div style="
+                font-size:14.5px;font-weight:750;color:#1a365d;
+                margin-bottom:10px;padding-bottom:8px;
+                border-bottom:2px solid #3182ce;">
+                📋 Profile Snapshot (Live)
+            </div>
+
+            <div style="
+                display:flex;justify-content:space-between;
+                padding:5px 0;font-size:13.5px;
+            ">
+                <span style="color:#4b5563;">👤 Gender / Marital</span>
+                <span style="font-weight:650;">{gender} · {married}</span>
+            </div>
+            <div style="
+                display:flex;justify-content:space-between;
+                padding:5px 0;font-size:13.5px;
+            ">
+                <span style="color:#4b5563;">🎓 Education</span>
+                <span style="font-weight:650;">{education}</span>
+            </div>
+            <div style="
+                display:flex;justify-content:space-between;
+                padding:5px 0;font-size:13.5px;
+            ">
+                <span style="color:#4b5563;">💳 Credit History</span>
+                <span style="font-weight:650;">
+                    {'✅ Good' if credit_history == 1.0 else '❌ Poor'}
+                </span>
+            </div>
+            <div style="
+                display:flex;justify-content:space-between;
+                padding:5px 0;font-size:13.5px;
+            ">
+                <span style="color:#4b5563;">📍 Property</span>
+                <span style="font-weight:650;">{property_area}</span>
+            </div>
+
+            <hr style="margin:10px 0;">
+
+            <div style="
+                display:flex;justify-content:space-between;
+                padding:5px 0;font-size:13.5px;
+                background:#eef4ff;border-radius:8px;
+                padding:8px 10px;margin:6px 0;
+            ">
+                <span style="font-weight:700;">📊 Total Income</span>
+                <span style="font-weight:700;color:#1f77b4;">
+                    {total_income:,.2f}
+                </span>
+            </div>
+
+            <div style="
+                display:flex;justify-content:space-between;
+                padding:5px 0;font-size:13.5px;
+            ">
+                <span style="color:#4b5563;">💰 Loan Amount</span>
+                <span style="font-weight:650;">{loan_amount:,.2f}</span>
+            </div>
+            <div style="
+                display:flex;justify-content:space-between;
+                padding:5px 0;font-size:13.5px;
+            ">
+                <span style="color:#4b5563;">⏱️ Term</span>
+                <span style="font-weight:650;">
+                    {loan_term} m ({loan_term/12:.0f} yrs)
+                </span>
+            </div>
+
+            <div style="
+                display:flex;justify-content:space-between;
+                padding:5px 0;font-size:13.5px;
+                background:#fff7e6;border-radius:8px;
+                padding:8px 10px;margin-top:6px;
+            ">
+                <span style="font-weight:700;">📐 LTI</span>
+                <span style="font-weight:700;">
+                    {loan_to_income:.4f}
+                    <span style="
+                        color:{lti_color};margin-left:8px;">
+                        · {lti_risk}
+                    </span>
+                </span>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+st.markdown("---")
+
+# ============================================================
+# RUN ALL MODELS
+# ============================================================
+
+if run:
+
+    with st.spinner(
+        f"Running applicant profile through {len(all_models)} classifiers ..."
+    ):
+
+        input_df = pd.DataFrame({
+            "Gender": [gender],
+            "Married": [married],
+            "Dependents": [dependents],
+            "Education": [education],
+            "Self_Employed": [self_employed],
+            "ApplicantIncome": [applicant_income],
+            "CoapplicantIncome": [coapplicant_income],
+            "LoanAmount": [loan_amount],
+            "Loan_Amount_Term": [loan_term],
+            "Credit_History": [credit_history],
+            "Property_Area": [property_area]
+        })
+
+        processed_df = add_features(input_df.copy())
+
+        rows = []
+
+        for model_name, model in all_models.items():
+
+            pred_int = int(model.predict(processed_df)[0])
+            prob = float(model.predict_proba(processed_df)[0][1])
+            verdict = "Approved" if pred_int == 1 else "Rejected"
+
+            info = MODEL_CATALOG.get(model_name, {"type": "Base", "tag": ""})
+
+            rows.append({
+                "Model": model_name,
+                "Type": info["type"],
+                "Tag": info["tag"],
+                "Prediction": verdict,
+                "Prediction Class": pred_int,
+                "Probability": prob,
+                "Probability %": prob * 100,
+            })
+
+        results_df = pd.DataFrame(rows)
+        results_df = results_df.sort_values(
+            "Probability", ascending=False
+        ).reset_index(drop=True)
+        results_df.insert(0, "Rank", np.arange(1, len(results_df) + 1))
+
+    # ---- Consensus analysis ----
+
+    n_approved = int((results_df["Prediction"] == "Approved").sum())
+    n_rejected = int((results_df["Prediction"] == "Rejected").sum())
+    n_total = len(results_df)
+
+    max_prob = results_df["Probability %"].max()
+    min_prob = results_df["Probability %"].min()
+    spread = max_prob - min_prob
+    avg_prob = results_df["Probability %"].mean()
+    median_prob = results_df["Probability %"].median()
+    std_prob = results_df["Probability %"].std()
+
+    if n_approved == n_total:
+        consensus_level = "full"
+        consensus_title = "🟩 FULL CONSENSUS — All models vote APPROVED"
+        consensus_body = (
+            "Every single classifier returned an Approved recommendation. "
+            "Confidence in an approval decision is very high."
+        )
+        consensus_class = "full-consensus"
+    elif n_rejected == n_total:
+        consensus_level = "full"
+        consensus_title = "🟥 FULL CONSENSUS — All models vote REJECTED"
+        consensus_body = (
+            "Every single classifier returned a Rejected recommendation. "
+            "Confidence in a decline decision is very high."
+        )
+        consensus_class = "full-consensus"
+    elif n_approved >= n_total * 0.7 or n_rejected >= n_total * 0.7:
+        consensus_level = "strong"
+        majority = "APPROVED" if n_approved > n_rejected else "REJECTED"
+        majority_count = max(n_approved, n_rejected)
+        consensus_title = (
+            f"🟧 STRONG MAJORITY — "
+            f"{majority_count}/{n_total} models vote {majority}"
+        )
+        consensus_body = (
+            "There is a strong majority leaning, though not unanimity — "
+            "a small number of models diverge. The minority models should be "
+            "reviewed for explanation."
+        )
+        consensus_class = "split-consensus"
+    else:
+        consensus_level = "divided"
+        consensus_title = (
+            f"🟨 DIVIDED OPINION — "
+            f"{n_approved} Approve vs {n_rejected} Reject"
+        )
+        consensus_body = (
+            "The panel is split. Manual underwriting judgement is strongly "
+            "recommended. Review the least- and most-confident models "
+            "below and inspect their decision boundary drivers."
+        )
+        consensus_class = "div-consensus"
+
+    # ============================================================
+    # CONSENSUS CARD + KPIs
+    # ============================================================
+
+    st.markdown(
+        f"""
+        <div class="consensus-card {consensus_class}">
+            <div style="font-size:19px;font-weight:800;margin-bottom:6px;">
+                {consensus_title}
+            </div>
+            <div style="font-size:14.5px;color:#374151;line-height:1.55;">
+                {consensus_body}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+
+    k1.metric(
+        "Models Approving",
+        f"{n_approved} / {n_total}",
+        f"{n_approved/n_total*100:.0f}%"
+    )
+    k2.metric(
+        "Models Rejecting",
+        f"{n_rejected} / {n_total}",
+        f"{n_rejected/n_total*100:.0f}%"
+    )
+    k3.metric(
+        "Agreement Rate",
+        (
+            "100.0%" if consensus_level == "full"
+            else f"{max(n_approved, n_rejected) / n_total * 100:.1f}%"
+        )
+    )
+    k4.metric(
+        "Avg Approval Probability",
+        f"{avg_prob:.1f}%",
+        f"±{std_prob:.1f} σ" if pd.notna(std_prob) else None
+    )
+    k5.metric(
+        "Probability Spread (Max − Min)",
+        f"{spread:.1f} pp",
+        f"Low {min_prob:.0f}% → High {max_prob:.0f}%"
+    )
+
+    st.markdown("---")
+
+    # ============================================================
+    # VISUAL COMPARISON
+    # ============================================================
+
+    section_title("📊 Visual Comparison of Model Outputs")
+
+    viz_c1, viz_c2 = st.columns([1.4, 1])
+
+    with viz_c1:
+
+        st.markdown(
+            "**Approval Probability by Model (sorted, highest → lowest)**"
+        )
+
+        chart_df = (
+            results_df[["Model", "Probability %"]]
+            .set_index("Model")
+            .sort_values("Probability %", ascending=True)
+        )
+
+        st.bar_chart(
+            chart_df,
+            width='stretch',
+            horizontal=True,
+            height=280 + 30 * n_total,
+            color="#1f77b4"
+        )
+
+    with viz_c2:
+
+        st.markdown("**Verdict Distribution**")
+
+        verdict_counts = pd.DataFrame({
+            "Verdict": ["Approved", "Rejected"],
+            "Models": [n_approved, n_rejected]
+        }).set_index("Verdict")
+
+        st.bar_chart(
+            verdict_counts,
+            width='stretch',
+            height=300,
+            color=["#22c55e" if v == "Approved" else "#ef4444"
+                   for v in verdict_counts.index]
+        )
+
+        st.markdown("")
+
+        st.markdown("**Probability Range")
+
+        box_df = pd.DataFrame({
+            "Minimum": [min_prob],
+            "Median": [median_prob],
+            "Average": [avg_prob],
+            "Maximum": [max_prob]
+        }).T.rename(columns={0: "% Probability"})
+
+        st.dataframe(
+            box_df.style.format("{:.1f} %")
+                .bar(color="#93c5fd", vmin=0, vmax=100),
+            width='stretch'
+        )
+
+    st.markdown("---")
+
+    # ============================================================
+    # PER-MODEL DETAILED ROWS
+    # ============================================================
+
+    section_title("🧠 Per-Model Predictions & Probabilities")
+
+    st.caption(
+        "Models are ranked by approval probability (descending)."
+        "Each row shows rank, model/type, Approved/Rejected pill,"
+        "numeric probability %, and a color-track visualising where the probability"
+        "falls on a red→yellow→green scale."
+    )
+
+    for _, row in results_df.iterrows():
+
+        rank = int(row["Rank"])
+        mname = row["Model"]
+        mtype = row["Type"]
+        mtag = row["Tag"]
+        verdict = row["Prediction"]
+        prob_pct = float(row["Probability %"])
+
+        tag_class = "base-tag" if mtype == "Base" else "tuned-tag"
+
+        verdict_class = "verdict-yes" if verdict == "Approved" else "verdict-no"
+
+        fill_width = max(4.0, min(96.0, prob_pct))
+
+        st.markdown(
+            f"""
+            <div class="model-row">
+                <div>
+                    <div class="rank-dot">{rank}</div>
+                </div>
+                <div>
+                    <span class="mname">{mname}</span>
+                    <span class="mtag {tag_class}">{mtype.upper()}</span>
+                    <div style="font-size:11.5px;color:#6b7280;margin-top:2px;">
+                        {mtag}
+                    </div>
+                </div>
+                <div>
+                    <div class="{verdict_class}">
+                        {'✅ APPROVED' if verdict == 'Approved'
+                         else '❌ REJECTED'}
+                    </div>
+                </div>
+                <div style="text-align:right;font-weight:750;">
+                    {prob_pct:.2f}%
+                </div>
+                <div style="padding:0 6px;">
+                    <div class="prob-track">
+                        <div class="prob-fill"
+                             style="width:{fill_width}%;"></div>
+                        <div class="prob-marker"
+                             style="left:{fill_width}%;"></div>
+                    </div>
+                </div>
+                <div style="font-size:11.5px;color:#6b7280;text-align:right;">
+                    Baseline: 50% · {'above' if prob_pct >= 50 else 'below'} threshold
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    st.markdown("")
+
+    # ---- Detailed results table (downloadable) ----
+
+    with st.expander(
+        "📄 Full tabular results (for export / audit)",
+        expanded=False
+    ):
+
+        display_results = results_df[[
+            "Rank", "Model", "Type",
+            "Prediction", "Probability %"
+        ]].copy()
+        display_results["Probability %"] = (
+            display_results["Probability %"].round(2).astype(str) + " %"
+        )
+
+        st.dataframe(
+            display_results,
+            width='stretch',
+            hide_index=True,
+            height=32 + 35 * len(results_df)
+        )
+
+        csv = results_df.to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            "📥 Download Agreement Results as CSV",
+            data=csv,
+            file_name="model_agreement_results.csv",
+            mime="text/csv",
+            width='stretch'
+        )
+
+    # ============================================================
+    # OPTIONAL: SAVE ALL TO DB
+    # ============================================================
+
+    if save_option:
+
+        n_saved = save_agreement_to_db(
+            results_df,
+            applicant_income=applicant_income,
+            coapplicant_income=coapplicant_income,
+            total_income=total_income,
+            loan_amount=loan_amount,
+            loan_to_income=loan_to_income,
+            credit_history=credit_history,
+            education=education,
+            property_area=property_area,
+        )
+
+        st.success(
+            f"✅ Saved {n_saved} model predictions to the Prediction History "
+            "database. Navigate to 📝 Prediction History to review them."
+        )
+
+st.markdown("---")
+
+render_alert(
+    """
+    <b>💡 How to use this page:</b> Enter a profile, click <b>Run Agreement Check</b>,
+    and look first at the coloured consensus banner at the top of the results —
+    Full / Strong Majority / Divided. Then scan the ranked probabilities to
+    see which models are outliers. Where there is disagreement, those are the
+    applicants worth manual review!
+    """,
+    kind="info"
+)
+
+
+# ============================================================
+# DISCLAIMER FOOTER
+# ============================================================
+
+render_disclaimer_footer()
