@@ -59,7 +59,7 @@ st.set_page_config(
 inject_theme_css()
 render_sidebar_brand(
     app_name="Explainable AI",
-    subtitle="SHAP Global & Local Explanations"
+    subtitle="Global SHAP Feature Importance"
 )
 
 
@@ -109,11 +109,10 @@ render_page_hero(
     chip_label="SHAP EXPLAINABILITY",
     title="Explainable Artificial Intelligence (SHAP)",
     subtitle=(
-        "SHAP (SHapley Additive exPlanations) decomposes every model output "
-        "into the marginal contribution of each feature. This page surfaces "
-        "both global model behaviour (which features matter overall) and "
-        "local per-prediction explanations answering the question "
-        "\"Why did the model make this prediction?\"."
+        "Global SHAP charts summarize which features influenced the trained "
+        "models across the evaluation data. You can also inspect an individual "
+        "classifier's output; final recommendations and affordability review "
+        "are calculated on the main Prediction page."
     ),
 )
 
@@ -127,12 +126,7 @@ FEATURE_LABELS = {
     "num__Total_Income": "👥 Total Household Income",
     "num__Loan_Amount_Term": "⏱️ Loan Term (months)",
     "num__Loan_Amount": "💰 Requested Loan Amount",
-    "num__Loan_to_Income": "📐 Loan-to-Income Ratio",
     "num__Dependents_Standardized": "👨‍👩‍👧 Dependents (scaled)",
-    "cat__Gender_Male": "♂️ Gender = Male",
-    "cat__Gender_Female": "♀️ Gender = Female",
-    "cat__Married_No": "💔 Married = No",
-    "cat__Married_Yes": "💍 Married = Yes",
     "cat__Education_Not Graduate": "📚 Education = Not Graduate",
     "cat__Education_Graduate": "🎓 Education = Graduate",
     "cat__Self_Employed_No": "💼 Self-Employed = No",
@@ -180,8 +174,6 @@ def history_row_to_input_df(row: pd.Series) -> pd.DataFrame:
     """
 
     return pd.DataFrame({
-        "Gender": ["Male"],  # history does not store gender/marital
-        "Married": ["Yes"],  # keep sensible defaults; numeric inputs
         "Dependents": [0],    # are sourced from the history row below
         "Education": [row["education"] if pd.notna(row.get("education")) else "Graduate"],
         "Self_Employed": ["No"],
@@ -534,7 +526,6 @@ else:
             cp_education = st.selectbox(
                 "Education", ["Graduate", "Not Graduate"]
             )
-            cp_gender = st.selectbox("Gender", ["Male", "Female"])
 
         with c2:
             cp_applicant_inc = st.number_input(
@@ -543,7 +534,6 @@ else:
             cp_coapplicant_inc = st.number_input(
                 "Coapplicant Income", min_value=0.0, value=0.0, step=100.0
             )
-            cp_married = st.selectbox("Married", ["Yes", "No"])
 
         with c3:
             cp_loan_amount = st.number_input(
@@ -582,8 +572,6 @@ else:
     if run_custom:
 
         custom_input = pd.DataFrame({
-            "Gender": [cp_gender],
-            "Married": [cp_married],
             "Dependents": [cp_dependents],
             "Education": [cp_education],
             "Self_Employed": [cp_self_employed],
@@ -615,11 +603,11 @@ else:
                 pred = int(model.predict(processed)[0])
                 prob = float(model.predict_proba(processed)[0][1])
 
-            prediction_label = "Approved" if pred == 1 else "Rejected"
+            prediction_label = "Positive class" if pred == 1 else "Negative class"
             probability_value = prob
 
             st.success(
-                f"Custom prediction completed with **{cp_model}** → "
+                f"Individual model result from **{cp_model}** → "
                 f"**{prediction_label}** with probability "
                 f"**{probability_value * 100:.2f}%**."
             )
@@ -633,463 +621,29 @@ else:
 
 
 # ============================================================
-# CONTRIBUTION COMPUTATION + WHY-EXPLANATION
+# CUSTOM / HISTORICAL MODEL OUTPUT
 # ============================================================
 
 if (selected_row is not None or custom_input is not None) and \
-   shap_importance_df is not None and \
-   prediction_label is not None and \
-   probability_value is not None:
-
-    st.markdown("")
-
-    # ----- Derive profile values for the common keys -----
-
-    if selected_row is not None:
-        input_df = history_row_to_input_df(selected_row)
-        input_df = add_features(input_df)
-        model_used = selected_row.get("model", "Unknown")
-    else:
-        input_df = add_features(custom_input.copy())
-        model_used = cp_model
-
-    total_income = (
-        float(input_df["ApplicantIncome"].iloc[0]) +
-        float(input_df["CoapplicantIncome"].iloc[0])
+   prediction_label is not None and probability_value is not None:
+    section_title("🔎 Selected Model Result")
+    st.metric("Model", model_used, help="This is one model's output; the main Prediction page combines five models and applies the affordability policy.")
+    st.metric("Individual model approval probability", f"{probability_value * 100:.2f}%")
+    st.info(
+        f"This individual model labels the application **{prediction_label}**. "
+        "The final dashboard recommendation also considers the five-model average "
+        "and payment-to-income DTI, so the final Approved/Rejected status may "
+        "differ from this one model's result."
     )
-    loan_amount_val = float(input_df["LoanAmount"].iloc[0])
-    loan_to_income_val = loan_amount_val / (total_income + 1)
-    credit_val = float(input_df["Credit_History"].iloc[0])
-    education_val = str(input_df["Education"].iloc[0])
-    property_val = str(input_df["Property_Area"].iloc[0])
-    loan_term_val = float(input_df["Loan_Amount_Term"].iloc[0])
-
-    # Build a list of (label, value, sign, magnitude) contributions.
-    # Approach: take global SHAP importance as the magnitude, and
-    # assign direction using domain-approved rules (loan underwriting
-    # heuristics aligned with feature correlations).
-    contributions = []
-
-    # 1) Credit history
-    dir_sign = +1 if credit_val == 1.0 else -1
-    contributions.append({
-        "label": "💳 Credit History",
-        "detail": "Meets guidelines" if credit_val == 1.0 else "Poor / No history",
-        "value": "1.0" if credit_val == 1.0 else "0.0",
-        "sign": dir_sign,
-        "magnitude": (
-            shap_importance_df.loc[
-                shap_importance_df["Feature"].str.contains(
-                    "Credit_History", regex=False
-                ),
-                "SHAP Importance"
-            ].max() or 0.025
-        ),
-        "raw_feature": "Credit_History"
-    })
-
-    # 2) Total income
-    income_norm = min(total_income / 15000, 1.5)
-    dir_sign = +1 if income_norm >= 0.33 else -0.5
-    contributions.append({
-        "label": "👥 Total Household Income",
-        "detail": f"{total_income:,.2f}",
-        "value": f"{total_income:,.2f}",
-        "sign": dir_sign,
-        "magnitude": (
-            shap_importance_df.loc[
-                shap_importance_df["Feature"].str.contains(
-                    "Total_Income", regex=False
-                ),
-                "SHAP Importance"
-            ].max() or 0.012
-        ),
-        "raw_feature": "Total_Income"
-    })
-
-    # 3) Loan to income
-    if loan_to_income_val < 0.02:
-        dir_sign = +1
-    elif loan_to_income_val < 0.04:
-        dir_sign = +0.25
-    else:
-        dir_sign = -1
-    contributions.append({
-        "label": "📐 Loan-to-Income Ratio",
-        "detail": "Adequate affordability" if loan_to_income_val < 0.04 else "Elevated burden",
-        "value": f"{loan_to_income_val:.4f}",
-        "sign": dir_sign,
-        "magnitude": (
-            shap_importance_df.loc[
-                shap_importance_df["Feature"].str.contains(
-                    "Loan_to_Income|LoanAmount", regex=True
-                ),
-                "SHAP Importance"
-            ].max() or 0.010
-        ),
-        "raw_feature": "Loan_to_Income"
-    })
-
-    # 4) Education
-    dir_sign = +1 if education_val == "Graduate" else -1
-    contributions.append({
-        "label": "🎓 Education",
-        "detail": education_val,
-        "value": education_val,
-        "sign": dir_sign,
-        "magnitude": (
-            shap_importance_df.loc[
-                shap_importance_df["Feature"].str.contains(
-                    "Education", regex=False
-                ),
-                "SHAP Importance"
-            ].max() or 0.006
-        ),
-        "raw_feature": "Education"
-    })
-
-    # 5) Loan amount
-    loan_norm = min(loan_amount_val / 300, 1.5)
-    dir_sign = -loan_norm if loan_norm > 0.5 else +0.1
-    contributions.append({
-        "label": "💰 Requested Loan Amount",
-        "detail": f"{loan_amount_val:,.2f}",
-        "value": f"{loan_amount_val:,.2f}",
-        "sign": dir_sign,
-        "magnitude": (
-            shap_importance_df.loc[
-                shap_importance_df["Feature"].str.contains(
-                    "LoanAmount", regex=False
-                ),
-                "SHAP Importance"
-            ].max() or 0.006
-        ),
-        "raw_feature": "LoanAmount"
-    })
-
-    # 6) Loan term
-    if 180 <= loan_term_val <= 360:
-        dir_sign = +0.5
-    else:
-        dir_sign = -0.3
-    contributions.append({
-        "label": "⏱️ Loan Term",
-        "detail": f"{loan_term_val:.0f} months ({loan_term_val/12:.0f} yrs)",
-        "value": f"{loan_term_val:.0f}",
-        "sign": dir_sign,
-        "magnitude": (
-            shap_importance_df.loc[
-                shap_importance_df["Feature"].str.contains(
-                    "Loan_Amount_Term", regex=False
-                ),
-                "SHAP Importance"
-            ].max() or 0.004
-        ),
-        "raw_feature": "Loan_Amount_Term"
-    })
-
-    # 7) Property area
-    if property_val == "Semiurban":
-        dir_sign = +1
-    elif property_val == "Urban":
-        dir_sign = +0.3
-    else:
-        dir_sign = -0.5
-    contributions.append({
-        "label": f"📍 Property Area = {property_val}",
-        "detail": property_val,
-        "value": property_val,
-        "sign": dir_sign,
-        "magnitude": (
-            shap_importance_df.loc[
-                shap_importance_df["Feature"].str.contains(
-                    "Property_Area", regex=False
-                ),
-                "SHAP Importance"
-            ].max() or 0.005
-        ),
-        "raw_feature": "Property_Area"
-    })
-
-    # 8) Coapplicant income (if any)
-    co_val = float(input_df["CoapplicantIncome"].iloc[0])
-    if co_val > 0:
-        contributions.append({
-            "label": "🤝 Co-applicant Income",
-            "detail": f"Additional {co_val:,.2f}",
-            "value": f"{co_val:,.2f}",
-            "sign": +1,
-            "magnitude": 0.004,
-            "raw_feature": "CoapplicantIncome"
-        })
-
-    # Normalise so they sum to roughly the log-odds gap from 50% baseline
-    raw_values = [c["sign"] * c["magnitude"] for c in contributions]
-    sum_abs = sum(abs(v) for v in raw_values) or 1
-
-    # Center around a baseline probability of 0.5 (logit = 0)
-    # Convert probability -> log-odds (logit) target
-    target_logit = np.log(probability_value / (1 - probability_value + 1e-9))
-
-    scale = target_logit / sum(raw_values) if abs(sum(raw_values)) > 1e-6 else 1.0
-
-    for i, c in enumerate(contributions):
-        c["shap_units"] = raw_values[i] * scale
-
-    # Sort by |contribution|
-    contributions_sorted = sorted(
-        contributions,
-        key=lambda c: abs(c["shap_units"]),
-        reverse=True
+    st.caption(
+        "The chart above shows global SHAP importance from the trained models. "
+        "This page does not calculate local SHAP values for the selected applicant."
     )
-
-    # ----- Prediction outcome headline -----
-
-    st.markdown("")
-
-    headline_c1, headline_c2, headline_c3, headline_c4 = st.columns(4)
-
-    if prediction_label == "Approved":
-        headline_c1.success("### ✅ APPROVED")
-    else:
-        headline_c1.error("### ❌ REJECTED")
-
-    headline_c2.metric(
-        "Approval Probability",
-        f"{probability_value * 100:.2f}%"
-    )
-    headline_c3.metric(
-        "Model",
-        model_used
-    )
-    headline_c4.metric(
-        "Features driving this prediction",
-        len(contributions_sorted)
-    )
-
-    st.markdown("")
-
-    # ----- Positive / Negative contributions -----
-
-    section_title("📊 Positive & Negative Feature Contributions")
-
-    pos_c, neg_c, neu_c = st.columns([1.1, 1.1, 0.8])
-
-    pos_list = [c for c in contributions_sorted if c["shap_units"] > 0]
-    neg_list = [c for c in contributions_sorted if c["shap_units"] < 0]
-    neu_list = [c for c in contributions_sorted if abs(c["shap_units"]) < 1e-4]
-
-    max_abs = max(
-        (abs(c["shap_units"]) for c in contributions_sorted),
-        default=0.001
-    )
-
-    with pos_c:
-        st.markdown(
-            "**✅ Approving (Positive) Contributions**"
-        )
-        if not pos_list:
-            st.caption("No net positive contributions.")
-        for c in pos_list:
-            pct = int(abs(c["shap_units"]) / max_abs * 100)
-            st.markdown(
-                f"""
-                <div class="feature-card pos-contrib">
-                    <div class="feature-headline">
-                        <span class="feature-name">{c['label']}</span>
-                        <span class="contrib-value pos-text">+{abs(c['shap_units']):.4f}</span>
-                    </div>
-                    <div class="feature-value">
-                        {c['detail']} &nbsp;·&nbsp; value = <code>{c['value']}</code>
-                    </div>
-                    <div class="waterfall-track">
-                        <div class="waterfall-fill-pos" style="right:0;width:{pct}%;"></div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    with neg_c:
-        st.markdown(
-            "**❌ Rejecting (Negative) Contributions**"
-        )
-        if not neg_list:
-            st.caption("No net negative contributions — strong profile!")
-        for c in neg_list:
-            pct = int(abs(c["shap_units"]) / max_abs * 100)
-            st.markdown(
-                f"""
-                <div class="feature-card neg-contrib">
-                    <div class="feature-headline">
-                        <span class="feature-name">{c['label']}</span>
-                        <span class="contrib-value neg-text">{c['shap_units']:.4f}</span>
-                    </div>
-                    <div class="feature-value">
-                        {c['detail']} &nbsp;·&nbsp; value = <code>{c['value']}</code>
-                    </div>
-                    <div class="waterfall-track">
-                        <div class="waterfall-fill-neg" style="left:0;width:{pct}%;"></div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    with neu_c:
-        st.markdown(
-            "**⚖️ Aggregate Summary**"
-        )
-        pos_total = sum(c["shap_units"] for c in pos_list)
-        neg_total = sum(c["shap_units"] for c in neg_list)
-        net = pos_total + neg_total
-
-        st.markdown(
-            f"""
-            <div class="feature-card neutral-contrib">
-                <div class="feature-headline">
-                    <span class="feature-name">Sum of + contributions</span>
-                    <span class="contrib-value pos-text">+{pos_total:.4f}</span>
-                </div>
-                <div class="feature-headline">
-                    <span class="feature-name">Sum of − contributions</span>
-                    <span class="contrib-value neg-text">{neg_total:.4f}</span>
-                </div>
-                <div class="feature-headline" style="margin-top:6px;border-top:1px dashed #ccc;padding-top:6px;">
-                    <span class="feature-name">Net push (logit space)</span>
-                    <span class="contrib-value {'pos-text' if net>=0 else 'neg-text'}">{net:+.4f}</span>
-                </div>
-                <hr style="margin:10px 0 6px 0;">
-                <div style="font-size:13px;color:#374151;line-height:1.5;">
-                    Baseline probability = 50% (logit = 0).<br>
-                    Final probability =
-                    <strong>{probability_value*100:.2f}%</strong>.
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    st.markdown("---")
-
-    # ============================================================
-    # "WHY DID THE MODEL MAKE THIS PREDICTION?"
-    # ============================================================
-
-    section_title("❓ Why did the model make this prediction?")
-
-    # Build a narrative:
-    #  - top 2 positive reasons
-    #  - top 2 negative reasons (or "no major red flags")
-    #  - overall conclusion sentence
-
-    top_pos = pos_list[:2]
-    top_neg = neg_list[:2]
-
-    st.markdown(
-        f"""
-        <div style="
-            border:1px solid #1e3a8a;
-            border-radius:14px;
-            padding:22px 26px;
-            background:linear-gradient(135deg,#1e40af 0%,#0b3d91 100%);
-            color:#fff !important;
-            box-shadow: 0 4px 14px rgba(11,61,145,0.22);
-        ">
-            <div style="font-size:15px;font-weight:800;color:#fff !important;margin-bottom:10px;">
-                🗣️ Human-readable explanation
-            </div>
-
-            <div style="font-size:14.5px;line-height:1.75;color:#e0e7ff !important;font-weight:600;">
-
-                The <strong style="color:#fff !important;">{model_used}</strong> model classified this application
-                as <strong style="color:#fff !important;">{'APPROVED ✅' if prediction_label=='Approved' else 'REJECTED ❌'}</strong>
-                with a final approval probability of
-                <strong style="color:#fff !important;">{probability_value*100:.2f}%</strong>.
-
-                <br><br>
-
-                <strong style="color:#fff !important;">The biggest approving (+) drivers were:</strong>
-                <ol style="margin:6px 0 12px 22px;color:#e0e7ff !important;">
-                    {"".join(
-                        f"<li><strong>{p['label']}</strong>: {p['detail']} — this feature pushed approval by <span class='pos-text'>+{abs(p['shap_units']):.4f}</span> SHAP units.</li>"
-                        for p in top_pos
-                    ) if top_pos else "<li>No net positive drivers (unusual — verify inputs).</li>"}
-                </ol>
-
-                <strong style="color:#fff !important;">The biggest rejecting (−) drivers were:</strong>
-                <ol style="margin:6px 0 12px 22px;color:#e0e7ff !important;font-weight:600;">
-                    {"".join(
-                        f"<li style='color:#e0e7ff !important;font-weight:600;'><strong style='color:#fff !important;'>{n['label']}</strong>: {n['detail']} — this feature pushed rejection by <span class='neg-text'>{abs(n['shap_units']):.4f}</span> SHAP units.</li>"
-                        for n in top_neg
-                    ) if top_neg else "<li style='color:#bfdbfe !important;font-weight:600;'><em style='color:#bfdbfe !important;'>No major negative drivers were detected for this applicant profile.</em></li>"}
-                </ol>
-
-                Overall, the <strong style="color:#fff !important;">positive contributors
-                {'outweighed' if (pos_total + neg_total) >= 0 else 'were outweighed by'}</strong>
-                the negative contributors in log-odds space
-                (net <strong style="color:#fff !important;">{net:+.4f}</strong>), resulting in the final
-                <strong style="color:#fff !important;">{prediction_label.upper()}</strong> recommendation.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    st.markdown("")
-
-    # Bullet takeaways for quick scanning
-    takeaway_c1, takeaway_c2, takeaway_c3 = st.columns(3)
-
-    # Top 1 positive
-    if top_pos:
-        p = top_pos[0]
-        takeaway_c1.info(
-            f"👍 **#1 Approver:**\n\n**{p['label']}** — "
-            f"{p['detail']}. Contribution +{abs(p['shap_units']):.4f}."
-        )
-    else:
-        takeaway_c1.info("👍 No net approving drivers were computed.")
-
-    # Top 1 negative
-    if top_neg:
-        n = top_neg[0]
-        takeaway_c2.warning(
-            f"👎 **#1 Reducer:**\n\n**{n['label']}** — "
-            f"{n['detail']}. Contribution {n['shap_units']:.4f}."
-        )
-    else:
-        takeaway_c2.success("👎 No significant negative drivers.")
-
-    # Rule-of-thumb summary
-    if prediction_label == "Approved":
-        takeaway_c3.success(
-            f"📌 **Bottom line:** Strong approval profile. "
-            f"Credit & income signals outweigh any downside risks "
-            f"({probability_value*100:.0f}% approval)."
-        )
-    elif probability_value >= 0.4:
-        takeaway_c3.warning(
-            f"📌 **Bottom line:** Borderline case. The model was close "
-            f"to the 50% decision boundary ({probability_value*100:.0f}%). "
-            f"Manual review recommended."
-        )
-    else:
-        takeaway_c3.error(
-            f"📌 **Bottom line:** Clear decline signal. Weak or missing "
-            f"credit / affordability indicators led to a low probability "
-            f"({probability_value*100:.0f}%)."
-        )
 
 st.markdown("---")
-
 st.info(
-    """
-    💡 **Interpretability, not causality.** SHAP values explain how the
-    *trained model* behaves given the training data — they do not prove
-    that changing one input will independently cause a different lending
-    outcome. Always use alongside policy, compliance, and manual review.
-    """
+    "💡 **Interpretability, not causality.** Global SHAP importance describes "
+    "how the trained models use features across the evaluation data. It does "
+    "not prove that changing one input causes a particular lending outcome. "
+    "Marital status and gender are excluded from model scoring."
 )
-
-

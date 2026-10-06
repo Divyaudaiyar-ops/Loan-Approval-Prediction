@@ -1,20 +1,15 @@
 Feature,SHAP Importance
-num__Credit_History,0.14474804499502067
-num__ApplicantIncome,0.031522514623348055
-num__LoanToIncome,0.027553484212384825
-cat__Property_Area_Semiurban,0.026013546241895592
-num__CoapplicantIncome,0.02299719986644652
-num__LoanAmount,0.022049831280987215
-num__TotalIncome,0.02204669493603669
-cat__Property_Area_Rural,0.010518371694866161
-cat__Married_No,0.010305228406450508
-cat__Education_Graduate,0.009006203961112512
-cat__Education_Not Graduate,0.008662498288608333
-cat__Property_Area_Urban,0.008243945051970106
-cat__Married_Yes,0.007560052933654539
-num__Dependents,0.0070314680854031055
-num__Loan_Amount_Term,0.006770754911385344
-cat__Gender_Female,0.002999889413528691
-cat__Self_Employed_No,0.0026739642617175756
-cat__Gender_Male,0.002493810768327151
-cat__Self_Employed_Yes,0.0023172060891629796
+num__Credit_History,0.14090010020947843
+cat__Property_Area_Semiurban,0.027952702610280197
+num__LoanAmount,0.02368484221406037
+num__ApplicantIncome,0.022973453613016885
+num__TotalIncome,0.022088474728926496
+num__CoapplicantIncome,0.017925743271845065
+cat__Property_Area_Rural,0.014864627543623955
+cat__Education_Not Graduate,0.010065790706518866
+num__Loan_Amount_Term,0.009035936467086832
+num__Dependents,0.008327795595534199
+cat__Education_Graduate,0.007135902485387287
+cat__Property_Area_Urban,0.0051977916644056505
+cat__Self_Employed_Yes,0.0026346458374448935
+cat__Self_Employed_No,0.00222048095990931

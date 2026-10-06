@@ -161,26 +161,20 @@ LOAN_TERMS = {
         )
     },
     "loan to income": {
-        "question": "What is Loan-to-Income (LTI)?",
+        "question": "What is Payment-to-Income DTI?",
         "answer": (
-            "**Loan-to-Income Ratio (LTI) = Loan Amount / Total Household Income**\n\n"
-            "It measures how large the requested loan is compared to the money "
-            "coming in each period.\n\n"
-            "  - **< 0.02 (LOW):** Comfortable affordability.\n"
-            "  - **0.02 – 0.04 (MEDIUM):** Typical acceptable band.\n"
-            "  - **> 0.04 (HIGH):** Risky; repayment burden looks heavy.\n\n"
-            "High LTI almost always pushes approval probability DOWN."
+            "**Payment-to-Income DTI = (estimated monthly loan payment + existing monthly debt) / gross monthly household income.**\n\n"
+            "The app estimates the monthly payment from the loan principal, annual interest rate, and term. "
+            "Applicant and co-applicant income are added together.\n\n"
+            "This prototype approves only when DTI is at or below 36% and the five-model score is at least 60%. "
+            "A higher DTI fails this prototype's affordability rule. These example limits are not universal lender rules."
         )
     },
     "ltv": {
         "question": "What is LTV / loan-to-value?",
         "answer": (
-            "LTV = Loan Amount / Property Value. It isn't directly stored in "
-            "this dataset (we don't record property purchase value, only the "
-            "Property Area type: Rural / Semiurban / Urban).\n\n"
-            "A close proxy here is **Loan-to-Income** (LTI) which captures "
-            "affordability — and Property Area, which captures the local "
-            "market risk of the collateral."
+            "LTV = loan amount / property value. Property value is not collected in this dataset, "
+            "so this project cannot calculate LTV. Property area is a separate model input and is not an LTV substitute."
         )
     },
     "loan term": {
@@ -211,11 +205,9 @@ LOAN_TERMS = {
     "coapplicant": {
         "question": "What is a Coapplicant?",
         "answer": (
-            "A **co-applicant** (co-signer / co-borrower / guarantor) is a "
-            "second person whose income and credit are combined with the "
-            "primary applicant to strengthen repayment capacity.\n\n"
-            "A co-applicant is beneficial whenever their income is positive, "
-            "because Total Household Income rises and Loan-to-Income falls."
+            "A co-applicant is a second borrower whose income is included with the primary applicant’s income "
+            "when the app calculates total gross household income and payment-to-income DTI. A positive co-applicant "
+            "income can improve the affordability calculation; the model recommendation still depends on all model inputs."
         )
     },
     "self employed": {
@@ -242,18 +234,13 @@ LOAN_TERMS = {
     "probability": {
         "question": "What does Approval Probability mean?",
         "answer": (
-            "**Approval Probability** is the model's confidence, from 0% to "
-            "100%, that the application belongs to the *Approved* class.\n\n"
-            "  - **> 50%:** predicted APPROVED\n"
-            "  - **< 50%:** predicted REJECTED\n\n"
-            "The 50% line is the decision threshold. 70% means the model is "
-            "more confident than 50%; 20% means it strongly expects rejection.\n\n"
-            "Probability is NOT a promise. It reflects only what the model "
-            "learned from historical training data."
+            "The five-model approval probability is the average of the five classifiers’ estimated probabilities. "
+            "This prototype marks an application Approved only when the average is at least 60% and DTI is at or below 36%. "
+            "Otherwise it marks the application Rejected. These are illustrative academic-project thresholds, "
+            "not universal lender policy. Probability is not a promise."
         )
     }
 }
-
 
 ML_MODELS = {
     "logistic regression": {
@@ -490,17 +477,14 @@ DATASET_INFO = {
     "features": {
         "question": "Explain the features / columns.",
         "answer": (
-            "The 12 input features are:\n\n"
-            "**Demographics** – Loan_ID (ID, dropped from training), Gender, "
-            "Married, Dependents, Education, Self_Employed.\n\n"
-            "**Financial** – ApplicantIncome, CoapplicantIncome, LoanAmount, "
-            "Loan_Amount_Term.\n\n"
-            "**Underwriting signals** – Credit_History (0.0 or 1.0) + "
-            "Property_Area (Rural/Semiurban/Urban).\n\n"
-            "**Engineered features (during preprocessing)** – Total_Income "
-            "= Applicant + Coapplicant; Loan_to_Income = LoanAmount / "
-            "Total_Income. These two typically sit in the top 5 of the "
-            "global SHAP ranking."
+            "Gender and marital status are shown as applicant context but are "
+            "not direct model-scoring features. Verified applicant and "
+            "co-applicant incomes are combined.\n\n"
+            "The model uses dependents, education, self-employment, applicant "
+            "and co-applicant income, loan amount and term, credit history, "
+            "property area, and combined household income.\n\n"
+            "A separate affordability check estimates the monthly payment, "
+            "adds existing monthly debt, and divides by gross monthly household income."
         )
     },
     "missing values": {
@@ -546,7 +530,7 @@ def classify_intent(text: str) -> str:
             return "explain_prediction"
         return "loan_terms::probability"
 
-    if _matches(t, ["loan terms", "term", "lti", "loan to income",
+    if _matches(t, ["loan terms", "term", "lti", "loan to income", "dti", "payment to income",
                     "ltv", "loan-to-value", "credit history",
                     "coapplicant", "co-applicant", "co applicant",
                     "property area", "self-employed", "self employed",
@@ -554,7 +538,7 @@ def classify_intent(text: str) -> str:
                     "education"]):
         if _matches(t, ["credit"]): return "terms::credit history"
         if _matches(t, ["ltv", "loan-to-value", "loan to value"]): return "terms::ltv"
-        if _matches(t, ["lti", "loan to income", "loan-to-income"]): return "terms::loan to income"
+        if _matches(t, ["lti", "loan to income", "loan-to-income", "dti", "payment to income"]): return "terms::loan to income"
         if _matches(t, ["term"]): return "terms::loan term"
         if _matches(t, ["property"]): return "terms::property area"
         if _matches(t, ["coapplicant", "co-applicant", "co applicant"]): return "terms::coapplicant"
@@ -704,99 +688,35 @@ def generate_response(user_text: str) -> str:
         model = last.get("model", "Unknown")
         ts = last.get("timestamp", "?")
         credit = last.get("credit_history", np.nan)
-        income = last.get("applicant_income", 0.0)
-        co_inc = last.get("coapplicant_income", 0.0)
-        total_inc = last.get("total_income", 0.0) or (income + co_inc)
-        loan = last.get("loan_amount", 0.0)
-        lti = last.get("loan_to_income", None) or (loan / (total_inc + 1))
+        income = float(last.get("applicant_income", 0.0) or 0.0)
+        co_inc = float(last.get("coapplicant_income", 0.0) or 0.0)
+        total_inc = float(last.get("total_income", 0.0) or (income + co_inc))
+        dti = last.get("debt_to_income", None)
+        monthly_payment = last.get("estimated_monthly_payment", None)
+        existing_debt = last.get("existing_monthly_debt", None)
         edu = last.get("education", "N/A")
         area = last.get("property_area", "N/A")
 
-        risk = "LOW 🟢"
-        if 0.02 <= lti < 0.04: risk = "MEDIUM 🟡"
-        elif lti >= 0.04: risk = "HIGH 🔴"
-
-        # Build top drivers
-        reasons_for = []
-        reasons_against = []
-
-        if credit == 1.0:
-            reasons_for.append(("💳 Good Credit History",
-                                "Biggest single approving driver."))
-        else:
-            reasons_against.append(("💳 Poor / Absent Credit History",
-                                    "Largest single rejecting driver."))
-
-        if lti < 0.02:
-            reasons_for.append(("📐 Low LTI",
-                                f"LTI = {lti:.4f} indicates comfortable affordability."))
-        elif lti >= 0.04:
-            reasons_against.append(("📐 Elevated LTI",
-                                    f"LTI = {lti:.4f} flags a heavy repayment burden."))
-
-        if edu == "Graduate":
-            reasons_for.append(("🎓 Graduate education",
-                                "Correlated with higher repayment capacity."))
-        else:
-            reasons_against.append(("📚 Not Graduate",
-                                    "Slight downward pressure on approval probability."))
-
-        if area == "Semiurban":
-            reasons_for.append(("🏘️ Semiurban property area",
-                                "This area usually has the highest approval rate band."))
-        elif area == "Rural":
-            reasons_against.append(("🌾 Rural property area",
-                                    "Collateral market risk may be priced in lower."))
-
-        if co_inc and float(co_inc) > 0:
-            reasons_for.append(("🤝 Positive Co-applicant Income",
-                                f"Adds {float(co_inc):,.2f} to household income."))
-
-        total_income_ok = total_inc >= 5000
-        if total_income_ok:
-            reasons_for.append(("👥 Above-median Total Income",
-                                f"{total_inc:,.2f} strengthens repayment capacity."))
-        else:
-            reasons_against.append(("👥 Low Total Household Income",
-                                    f"{total_inc:,.2f} is below dataset median."))
-
-        verdict_sentence = (
-            f"Prediction #{last['id']} ({ts}) with **{model}** returned "
-            f"**{outcome.upper()}** with an approval probability of "
-            f"**{p*100:.2f}%** (decision threshold is 50%).\n\n"
+        dti_text = f"{float(dti) * 100:.2f}%" if pd.notna(dti) else "not available for this record"
+        payment_text = f"{float(monthly_payment):,.2f}" if pd.notna(monthly_payment) else "not recorded"
+        debt_text = f"{float(existing_debt):,.2f}" if pd.notna(existing_debt) else "not recorded"
+        verdict = (
+            f"Prediction #{last['id']} ({ts}) used the five-model estimate and "
+            f"returned **{outcome.upper()}** with an average approval probability "
+            f"of **{p * 100:.2f}%**. This is a demo decision-support result, not a lender decision."
         )
-
         profile = (
-            "**Profile snapshot:**\n"
-            f"  • Credit History: **{'Good (1.0)' if credit==1.0 else 'Poor (0.0)'}"
-            f"**\n  • Total Income: **{total_inc:,.2f}** (Applicant {income:,.2f}"
-            f" + Co-applicant {co_inc:,.2f})\n"
-            f"  • Loan Amount: **{loan:,.2f}**, Loan-to-Income = **{lti:.4f}"
-            f" ({risk})**\n"
-            f"  • Education: **{edu}**, Property Area: **{area}**\n\n"
+            "\n\n**Recorded profile and affordability calculation:**\n"
+            f"- Credit history: **{'Good (1.0)' if credit == 1.0 else 'Poor / unknown'}**; "
+            f"education: **{edu}**; property area: **{area}**.\n"
+            f"- Gross household income: **{total_inc:,.2f} per month** "
+            f"({income:,.2f} applicant + {co_inc:,.2f} co-applicant).\n"
+            f"- Estimated monthly payment: **{payment_text}**; existing monthly debt: **{debt_text}**.\n"
+            f"- Payment-to-income DTI: **{dti_text}**. Approval requires DTI at or below 36%. Older saved records may not include DTI.\n"
+            "- The combined recommendation requires a probability of at least 60% and DTI at or below 36%; "
+            "Marital status is context only and does not affect the model score."
         )
-
-        drivers = "**Why the model made this prediction?**\n"
-        if reasons_for:
-            drivers += "\n**Approving (positive) drivers:**\n"
-            for label, detail in reasons_for:
-                drivers += f"  ✅ {label} — {detail}\n"
-        if reasons_against:
-            drivers += "\n**Rejecting (negative) drivers:**\n"
-            for label, detail in reasons_against:
-                drivers += f"  ❌ {label} — {detail}\n"
-
-        if shap_df is not None and len(shap_df):
-            top2 = shap_df.head(2)
-            drivers += (
-                "\n💡 **Globally,** the 2 most influential features overall "
-                "are **" + top2.iloc[0]["Feature"] + "** (weight "
-                f"{top2.iloc[0]['SHAP Importance']:.4f}) and **"
-                + top2.iloc[1]["Feature"] + f"** (weight "
-                f"{top2.iloc[1]['SHAP Importance']:.4f})."
-            )
-
-        return verdict_sentence + profile + drivers
+        return verdict + profile
 
     # -------- LOAN TERMS --------
     if intent.startswith("terms::"):
@@ -958,7 +878,7 @@ st.markdown("---")
 STATIC_SUGGESTIONS = [
     "Explain my last prediction",
     "What is Credit History?",
-    "What is Loan-to-Income (LTI)?",
+    "What is Payment-to-Income DTI?",
     "Explain Random Forest",
     "Explain XGBoost Tuned",
     "What is SHAP?",

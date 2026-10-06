@@ -34,12 +34,6 @@ def add_features(df):
         df["CoapplicantIncome"]
     )
 
-    # Loan amount relative to total income
-    df["LoanToIncome"] = (
-        df["LoanAmount"] /
-        (df["TotalIncome"] + 1)
-    )
-
     return df
 
 
@@ -49,7 +43,12 @@ def add_features(df):
 
 def split_features_target(df):
 
-    X = df.drop("Loan_Status", axis=1)
+    # Keep sensitive demographic fields for the application profile, but do
+    # not let gender or marital status directly affect the model score.
+    # Demographic fields remain available for the applicant profile but are
+    # not scored. Principal divided by income is also not a payment-based DTI.
+    excluded = ["Loan_Status", "Loan_ID", "Gender", "Married", "LoanToIncome"]
+    X = df.drop(columns=[column for column in excluded if column in df.columns])
     y = df["Loan_Status"].map({
         "Y": 1,
         "N": 0

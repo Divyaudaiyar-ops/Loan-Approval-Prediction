@@ -312,9 +312,9 @@ with f_c2:
         value=(0, 100)
     )
 
-    min_prob_filter = st.number_input(
-        "Min LTI (Loan-to-Income) filter",
-        min_value=0.0, value=0.0, step=0.005, format="%.4f"
+    dti_min, dti_max = st.slider(
+        "Payment-to-Income DTI (%)",
+        min_value=0, max_value=300, value=(0, 300)
     )
 
 with f_c3:
@@ -395,9 +395,10 @@ filtered = filtered[
     (filtered["probability"] * 100 <= prob_max)
 ]
 
-# LTI
-if "loan_to_income" in filtered.columns:
-    filtered = filtered[filtered["loan_to_income"].fillna(0) >= min_prob_filter]
+# Payment-to-income DTI
+if "debt_to_income" in filtered.columns:
+    dti_pct = pd.to_numeric(filtered["debt_to_income"], errors="coerce") * 100
+    filtered = filtered[dti_pct.between(dti_min, dti_max) | dti_pct.isna()]
 
 # Model / education / area
 filtered = filtered[
@@ -569,14 +570,14 @@ with st.expander("📋 Aggregate numeric summary (filtered)", expanded=False):
     numeric_cols = [
         "applicant_income", "coapplicant_income",
         "total_income", "loan_amount",
-        "loan_to_income", "probability"
+        "debt_to_income", "probability"
     ]
     rename_map = {
         "applicant_income": "Applicant Income",
         "coapplicant_income": "Coapplicant Income",
         "total_income": "Total Income",
         "loan_amount": "Loan Amount",
-        "loan_to_income": "Loan-to-Income",
+        "debt_to_income": "Payment-to-Income DTI",
         "probability": "Probability (0–1)"
     }
 
@@ -601,7 +602,8 @@ section_title("🗂️ Prediction Records (Filtered)")
 display_df = filtered.copy()
 
 display_df["probability %"] = (display_df["probability"] * 100).round(2)
-display_df["loan_to_income"] = display_df["loan_to_income"].round(4)
+if "debt_to_income" in display_df.columns:
+    display_df["Payment-to-Income DTI (%)"] = (display_df["debt_to_income"] * 100).round(2)
 
 for col in ("applicant_income", "coapplicant_income", "total_income", "loan_amount"):
     if col in display_df.columns:
@@ -612,7 +614,7 @@ display_columns = [
     "prediction", "probability %",
     "applicant_income", "coapplicant_income",
     "total_income", "loan_amount",
-    "loan_to_income", "credit_history",
+    "Payment-to-Income DTI (%)", "credit_history",
     "education", "property_area"
 ]
 display_columns = [c for c in display_columns if c in display_df.columns]
@@ -651,7 +653,10 @@ st.caption(
 def render_row_card(i, row):
 
     outcome = row.get("prediction", "")
-    outcome_text = "✅ APPROVED" if outcome == "Approved" else "❌ REJECTED"
+    outcome_text = {
+        "Approved": "✅ RECOMMEND APPROVAL",
+        "Rejected": "❌ NOT RECOMMENDED",
+    }.get(outcome, str(outcome).upper())
 
     ch_val = row.get("credit_history", np.nan)
     if pd.isna(ch_val):
@@ -663,10 +668,8 @@ def render_row_card(i, row):
 
     prob_pct = float(row.get("probability", 0.0) or 0) * 100
 
-    lti = float(row.get("loan_to_income", 0.0) or 0)
-    lti_risk = "LOW 🟢"
-    if 0.02 <= lti < 0.04: lti_risk = "MEDIUM 🟡"
-    elif lti >= 0.04: lti_risk = "HIGH 🔴"
+    dti = pd.to_numeric(pd.Series([row.get("debt_to_income")]), errors="coerce").iloc[0]
+    dti_label = f"{dti * 100:.2f}%" if pd.notna(dti) else "Unavailable (older record)"
 
     title = (
         f"#{int(row.get('id', i))} · {row.get('timestamp','N/A')}"
@@ -678,9 +681,13 @@ def render_row_card(i, row):
         st.metric(
             "Approval Probability",
             f"{prob_pct:.2f}%",
-            delta="At or above 50% threshold" if prob_pct >= 50 else "Below 50% threshold"
+            delta=("Approval band" if prob_pct >= 60 else ("Review band" if prob_pct >= 40 else "Not-recommended band"))
         )
         st.caption(f"Credit History: {credit_label}")
+        basis = row.get("decision_basis")
+        if pd.isna(basis) or not str(basis).strip():
+            basis = "A detailed basis was not saved for this older prediction."
+        st.info(f"**Approval status: {outcome}**\n\n**Decision basis:** {basis}")
 
         info_col, decision_col = st.columns(2)
         with info_col:
@@ -692,6 +699,7 @@ def render_row_card(i, row):
                     ("Applicant Income", f"{row.get('applicant_income', 0):,.2f}"),
                     ("Co-applicant Income", f"{row.get('coapplicant_income', 0):,.2f}"),
                     ("Total Income", f"{row.get('total_income', 0):,.2f}"),
+                    ("Marital Status (context)", row.get("marital_status", "N/A")),
                 ],
                 columns=["Detail", "Value"]
             ).astype("string")
@@ -705,7 +713,10 @@ def render_row_card(i, row):
                     ("Verdict", outcome),
                     ("Probability", f"{prob_pct:.2f}%"),
                     ("Loan Amount", f"{row.get('loan_amount', 0):,.2f}"),
-                    ("Loan-to-Income", f"{lti:.4f} ({lti_risk})"),
+                    ("Payment-to-Income DTI", dti_label),
+                    ("Estimated Monthly Payment", f"{row.get('estimated_monthly_payment', 0):,.2f}"),
+                    ("Existing Monthly Debt", f"{row.get('existing_monthly_debt', 0):,.2f}"),
+                    ("Affordability Rate", f"{row.get('annual_interest_rate', 0):,.2f}%"),
                 ],
                 columns=["Detail", "Value"]
             ).astype("string")

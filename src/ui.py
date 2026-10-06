@@ -703,6 +703,8 @@ div[data-testid="stForm"] {{
 .alert-box.success  {{ background: #f0fdf4; border-color: #bbf7d0; color: #14532d; }}
 .alert-box.warning  {{ background: #fffbeb; border-color: #fde68a; color: #78350f; }}
 .alert-box.danger   {{ background: #fef2f2; border-color: #fecaca; color: #7f1d1d; }}
+.alert-box.approval-status {{ font-size: 20px !important; line-height: 1.35 !important; padding: 16px 20px !important; }}
+.alert-box.approval-status b {{ font-size: inherit !important; }}
 
 /* Streamlit native st.info() override */
 [data-testid="stAlert"] {{
